@@ -90,10 +90,11 @@ class OptimizationParams(ParamGroup):
         self.prune_from_iter = 500
         self.densify_until_iter = 10_000
         self.densify_grad_threshold = 0.0005
+        self.unpooling_grad_threshold = 0.0002
         self.prune_threshold = 0.005
         self.start_sample_pseudo = 2000
         self.end_sample_pseudo = 9500
-        self.sample_pseudo_interval = 10
+        self.sample_pseudo_interval = 100
         self.dist_thres = 10.
         self.depth_weight = 0.05
         self.depth_pseudo_weight = 0.5
