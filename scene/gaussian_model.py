@@ -60,7 +60,7 @@ class GaussianModel:
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
-        self.unpooling_grad_threshold = args.unpooling_grad_threshold
+        self.unpooling_grad_threshold = getattr(args, "unpooling_grad_threshold", 0.0002)
         self.setup_functions()
         self.bg_color = torch.empty(0)
         self.confidence = torch.empty(0)
@@ -405,7 +405,8 @@ class GaussianModel:
 
     def proximity(self, scene_extent, N = 3):
         dist, nearest_indices = distCUDA2(self.get_xyz)
-        dist_mask = dist > (0.01 * scene_extent)
+        # dist_mask = dist > (0.01 * scene_extent)
+        dist_mask = dist > ((0.01 * scene_extent) ** 2)
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
         grad_mask = grads.squeeze() > self.unpooling_grad_threshold

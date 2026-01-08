@@ -11,8 +11,9 @@
 import copy
 import matplotlib.pyplot as plt
 import torch
-from scene import Scene
 import os
+import sys
+import types
 from tqdm import tqdm
 import numpy as np
 from os import makedirs
@@ -29,6 +30,19 @@ from tqdm import tqdm
 from utils.graphics_utils import getWorld2View2
 from utils.pose_utils import generate_ellipse_path, generate_spiral_path
 from utils.general_utils import vis_depth
+
+
+def _install_depth_stub():
+    if os.getenv("FSGS_RENDER_NO_DEPTH", "1") != "1":
+        return
+    dummy = types.ModuleType("utils.depth_utils")
+
+    def estimate_depth(img, mode="test"):
+        h, w = img.shape[1:3]
+        return torch.zeros((h, w), device=img.device)
+
+    dummy.estimate_depth = estimate_depth
+    sys.modules.setdefault("utils.depth_utils", dummy)
 
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, args):
@@ -83,7 +97,8 @@ def render_video(source_path, model_path, iteration, views, gaussians, pipeline,
 
 
 def render_sets(dataset : ModelParams, pipeline : PipelineParams, args):
-
+    _install_depth_stub()
+    from scene import Scene
     with torch.no_grad():
         gaussians = GaussianModel(args)
         scene = Scene(args, gaussians, load_iteration=args.iteration, shuffle=False)
