@@ -93,7 +93,7 @@ def training(dataset, opt, pipe, args):
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 =  l1_loss_mask(image, gt_image)
+        Ll1 = l1_loss(image, gt_image)
         loss = ((1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)))
 
 
@@ -112,24 +112,30 @@ def training(dataset, opt, pipe, args):
             args.depth_weight = 0.001
 
 
+        # if iteration % args.sample_pseudo_interval == 0 and iteration > args.start_sample_pseudo and iteration < args.end_sample_pseudo:
+        #     if not pseudo_stack:
+        #         pseudo_stack = scene.getPseudoCameras().copy()
+        #     pseudo_cam = pseudo_stack.pop(randint(0, len(pseudo_stack) - 1))
+        #
+        #     render_pkg_pseudo = render(pseudo_cam, gaussians, pipe, background)
+        #     rendered_depth_pseudo = render_pkg_pseudo["depth"][0]
+        #     midas_depth_pseudo = estimate_depth(render_pkg_pseudo["render"], mode='train')
+        #
+        #     rendered_depth_pseudo = rendered_depth_pseudo.reshape(-1, 1)
+        #     midas_depth_pseudo = midas_depth_pseudo.reshape(-1, 1)
+        #     depth_loss_pseudo = (1 - pearson_corrcoef(rendered_depth_pseudo, -midas_depth_pseudo)).mean()
+        #
+        #     if torch.isnan(depth_loss_pseudo).sum() == 0:
+        #         loss_scale = min((iteration - args.start_sample_pseudo) / 500., 1)
+        #         loss += loss_scale * args.depth_pseudo_weight * depth_loss_pseudo
 
-        if iteration % args.sample_pseudo_interval == 0 and iteration > args.start_sample_pseudo and iteration < args.end_sample_pseudo:
-            if not pseudo_stack:
-                pseudo_stack = scene.getPseudoCameras().copy()
-            pseudo_cam = pseudo_stack.pop(randint(0, len(pseudo_stack) - 1))
-
-            render_pkg_pseudo = render(pseudo_cam, gaussians, pipe, background)
-            rendered_depth_pseudo = render_pkg_pseudo["depth"][0]
-            midas_depth_pseudo = estimate_depth(render_pkg_pseudo["render"], mode='train')
-
-            rendered_depth_pseudo = rendered_depth_pseudo.reshape(-1, 1)
-            midas_depth_pseudo = midas_depth_pseudo.reshape(-1, 1)
-            depth_loss_pseudo = (1 - pearson_corrcoef(rendered_depth_pseudo, -midas_depth_pseudo)).mean()
-
-            if torch.isnan(depth_loss_pseudo).sum() == 0:
-                loss_scale = min((iteration - args.start_sample_pseudo) / 500., 1)
-                loss += loss_scale * args.depth_pseudo_weight * depth_loss_pseudo
-
+        # Innovation 2: Entropy Regularization
+        # 配合 SH=1 和 Depth，强迫几何实体化，消除雾气
+        opacities = gaussians.get_opacity
+        opacities = torch.clamp(opacities, 1e-6, 1.0 - 1e-6)
+        entropy_loss = - (opacities * torch.log(opacities) + (1 - opacities) * torch.log(1 - opacities)).mean()
+        # 权重建议 0.01
+        loss += 0.01 * entropy_loss
 
         loss.backward()
         with torch.no_grad():

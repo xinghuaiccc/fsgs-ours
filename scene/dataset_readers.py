@@ -302,7 +302,11 @@ def readColmapSceneInfo(path, images, eval, n_views=0, llffhold=8):
     if n_views > 0:
         idx_sub = np.linspace(0, len(train_cam_infos)-1, n_views)
         idx_sub = [round(i) for i in idx_sub]
-        train_cam_infos = [c for idx, c in enumerate(train_cam_infos) if idx in idx_sub]
+        selected_idx = set(idx_sub)
+        sparse_train = [c for idx, c in enumerate(train_cam_infos) if idx in selected_idx]
+        remaining_train = [c for idx, c in enumerate(train_cam_infos) if idx not in selected_idx]
+        train_cam_infos = sparse_train
+        test_cam_infos = test_cam_infos + remaining_train
         assert len(train_cam_infos) == n_views
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
