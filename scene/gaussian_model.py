@@ -405,7 +405,7 @@ class GaussianModel:
 
     def proximity(self, scene_extent, N = 3):
         dist, nearest_indices = distCUDA2(self.get_xyz)
-        dist_mask = dist > ((0.01 * scene_extent)**2)
+        dist_mask = dist > ((0.05 * scene_extent)**2)
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
         grad_mask = grads.squeeze() > self.unpooling_grad_threshold

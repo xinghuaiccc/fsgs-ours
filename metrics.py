@@ -21,19 +21,23 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser
 
-def readImages(renders_dir, gt_dir):
+def readImages(renders_dir, gt_dir, device):
     renders = []
     gts = []
     image_names = []
-    for fname in os.listdir(gt_dir):
-        render = Image.open(renders_dir / fname)
-        gt = Image.open(gt_dir / fname)
-        renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
-        gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :].cuda())
+    for fname in sorted(os.listdir(gt_dir)):
+        gt_path = gt_dir / fname
+        render_path = renders_dir / fname
+        if not gt_path.is_file() or not render_path.is_file():
+            continue
+        render = Image.open(render_path)
+        gt = Image.open(gt_path)
+        renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].to(device))
+        gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :].to(device))
         image_names.append(fname)
     return renders, gts, image_names
 
-def evaluate(model_paths):
+def evaluate(model_paths, device):
 
     full_dict = {}
     per_view_dict = {}
@@ -50,8 +54,11 @@ def evaluate(model_paths):
             per_view_dict_polytopeonly[scene_dir] = {}
 
             test_dir = Path(scene_dir) / "test"
+            if not test_dir.exists():
+                print("  Skipping, missing test directory:", test_dir)
+                continue
 
-            for method in os.listdir(test_dir):
+            for method in sorted(os.listdir(test_dir)):
                 print("Method:", method)
 
                 full_dict[scene_dir][method] = {}
@@ -62,7 +69,10 @@ def evaluate(model_paths):
                 method_dir = test_dir / method
                 gt_dir = method_dir/ "gt"
                 renders_dir = method_dir / "renders"
-                renders, gts, image_names = readImages(renders_dir, gt_dir)
+                if not gt_dir.exists() or not renders_dir.exists():
+                    print("  Skipping, missing gt/renders:", method_dir)
+                    continue
+                renders, gts, image_names = readImages(renders_dir, gt_dir, device)
 
                 ssims = []
                 psnrs = []
@@ -73,17 +83,24 @@ def evaluate(model_paths):
                     psnrs.append(psnr(renders[idx], gts[idx]))
                     lpipss.append(lpips(renders[idx], gts[idx], net_type='vgg'))
 
-                print("  SSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
-                print("  PSNR : {:>12.7f}".format(torch.tensor(psnrs).mean(), ".5"))
-                print("  LPIPS: {:>12.7f}".format(torch.tensor(lpipss).mean(), ".5"))
+                if len(ssims) == 0:
+                    print("  Skipping, no valid image pairs")
+                    continue
+                ssims_t = torch.stack(ssims)
+                psnrs_t = torch.stack(psnrs)
+                lpipss_t = torch.stack(lpipss)
+
+                print("  SSIM : {:>12.7f}".format(ssims_t.mean().item()))
+                print("  PSNR : {:>12.7f}".format(psnrs_t.mean().item()))
+                print("  LPIPS: {:>12.7f}".format(lpipss_t.mean().item()))
                 print("")
 
-                full_dict[scene_dir][method].update({"SSIM": torch.tensor(ssims).mean().item(),
-                                                        "PSNR": torch.tensor(psnrs).mean().item(),
-                                                        "LPIPS": torch.tensor(lpipss).mean().item()})
-                per_view_dict[scene_dir][method].update({"SSIM": {name: ssim for ssim, name in zip(torch.tensor(ssims).tolist(), image_names)},
-                                                            "PSNR": {name: psnr for psnr, name in zip(torch.tensor(psnrs).tolist(), image_names)},
-                                                            "LPIPS": {name: lp for lp, name in zip(torch.tensor(lpipss).tolist(), image_names)}})
+                full_dict[scene_dir][method].update({"SSIM": ssims_t.mean().item(),
+                                                        "PSNR": psnrs_t.mean().item(),
+                                                        "LPIPS": lpipss_t.mean().item()})
+                per_view_dict[scene_dir][method].update({"SSIM": {name: ssim for ssim, name in zip(ssims_t.tolist(), image_names)},
+                                                            "PSNR": {name: psnr for psnr, name in zip(psnrs_t.tolist(), image_names)},
+                                                            "LPIPS": {name: lp for lp, name in zip(lpipss_t.tolist(), image_names)}})
 
             with open(scene_dir + "/results.json", 'w') as fp:
                 json.dump(full_dict[scene_dir], fp, indent=True)
@@ -93,8 +110,9 @@ def evaluate(model_paths):
         #     print("Unable to compute metrics for model", scene_dir)
 
 if __name__ == "__main__":
-    device = torch.device("cuda:0")
-    torch.cuda.set_device(device)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
 
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
@@ -104,4 +122,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     # if not os.path.exists(os.path.join(args.model_paths[0], 'test', 'ours_'+str(args.iteration), 'renders')):
     # os.system('python render.py -s /mnt/vita-nas/zehao/nerf_llff_data/horns/ --iteration ' + str(args.iteration) + ' -m ' +args.model_paths[0])
-    evaluate(args.model_paths)
+    evaluate(args.model_paths, device)

@@ -35,6 +35,14 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 from lpipsPyTorch import lpips
 
 
+def get_gradient(image):
+    # 计算图像梯度 (Edge Map)
+    # image shape: [1, 3, H, W]
+    dy = image[:, :, 1:, :] - image[:, :, :-1, :]
+    dx = image[:, :, :, 1:] - image[:, :, :, :-1]
+    return dx, dy
+
+
 def training(dataset, opt, pipe, args):
     testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from = args.test_iterations, \
             args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from
@@ -129,13 +137,17 @@ def training(dataset, opt, pipe, args):
         #         loss_scale = min((iteration - args.start_sample_pseudo) / 500., 1)
         #         loss += loss_scale * args.depth_pseudo_weight * depth_loss_pseudo
 
-        # Innovation 2: Entropy Regularization
-        # 配合 SH=1 和 Depth，强迫几何实体化，消除雾气
-        opacities = gaussians.get_opacity
-        opacities = torch.clamp(opacities, 1e-6, 1.0 - 1e-6)
-        entropy_loss = - (opacities * torch.log(opacities) + (1 - opacities) * torch.log(1 - opacities)).mean()
-        # 权重建议 0.01
-        loss += 0.01 * entropy_loss
+        # --- Innovation 2: Strong SASR (Structure-Appearance Dual Regularization) ---
+        # [A. 结构锐化] Gradient Consistency Loss
+        # 权重翻倍至 0.1，强力对抗模糊
+        pred_dx, pred_dy = get_gradient(image.unsqueeze(0))
+        gt_dx, gt_dy = get_gradient(gt_image.unsqueeze(0))
+        grad_loss = torch.abs(pred_dx - gt_dx).mean() + torch.abs(pred_dy - gt_dy).mean()
+        loss += 0.1 * grad_loss
+        # [B. 外观防过拟合] SH Sparsity Regularization
+        # 权重提升至 0.2 (强约束)，在 SH=3 模式下强制稀疏化
+        # 这能有效压制 Train/Test 的巨大泛化误差
+        loss += 0.2 * gaussians._features_rest.abs().mean()
 
         loss.backward()
         with torch.no_grad():
@@ -264,9 +276,9 @@ if __name__ == "__main__":
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
 
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[10_00, 20_00, 30_00, 50_00, 10_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[50_00, 10_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 50_00, 10_000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[50_00, 10_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[3000, 50_00, 10_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--train_bg", action="store_true")
     args = parser.parse_args(sys.argv[1:])
