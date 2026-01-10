@@ -43,8 +43,9 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
-    mask: np.array
-    bounds: np.array
+    depth_image: np.array = None
+    mask: np.array = None
+    bounds: np.array = None
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -52,6 +53,7 @@ class SceneInfo(NamedTuple):
     test_cameras: list
     nerf_normalization: dict
     ply_path: str
+    pseudo_cameras: list = None
 
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
@@ -264,6 +266,13 @@ def readColmapSceneInfo(path, images, eval, n_views=0, llffhold=8):
     # ply_path = os.path.join(path, "sparse/0/points3D.ply")
     # bin_path = os.path.join(path, "sparse/0/points3D.bin")
     ply_path = os.path.join(path, str(n_views) + "_views/dense/fused.ply")
+    if n_views == 0:
+        fallback_views = 8
+        alt_ply_path = os.path.join(path, str(fallback_views) + "_views/dense/fused.ply")
+        if os.path.exists(alt_ply_path):
+            ply_path = alt_ply_path
+    if os.path.exists(ply_path) and os.path.getsize(ply_path) < 1024:
+        ply_path = ""
 
     try:
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -328,7 +337,18 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         skip = 8 if transformsfile == 'transforms_test.json' else 1
         frames = contents["frames"][::skip]
         for idx, frame in tqdm(enumerate(frames)):
-            cam_name = os.path.join(path, frame["file_path"] + extension)
+            frame_path = frame["file_path"]
+            if not os.path.splitext(frame_path)[1]:
+                frame_path = frame_path + extension
+            if frame_path.startswith("./"):
+                frame_path = frame_path[2:]
+            frame_path = os.path.normpath(frame_path)
+            if os.path.isabs(frame_path):
+                image_path = frame_path
+            elif os.path.exists(frame_path):
+                image_path = frame_path
+            else:
+                image_path = os.path.join(path, frame_path)
 
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
@@ -340,8 +360,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
             T = w2c[:3, 3]
 
-            image_path = os.path.join(path, cam_name)
-            image_name = Path(cam_name).stem
+            image_name = Path(image_path).stem
             image = Image.open(image_path)
 
             im_data = np.array(image.convert("RGBA"))
@@ -358,8 +377,30 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             mask = norm_data[:, :, 3:4]
             if skip == 1:
-                depth_image = np.load('../SparseNeRF/depth_midas_temp_DPT_Hybrid/Blender/' +
-                                      image_path.split('/')[-4]+'/'+image_name+'_depth.npy')
+                scene_name = os.path.basename(path)
+                if scene_name.endswith("_8views"):
+                    scene_name = scene_name[:-7]
+                split = "train" if "train" in frame_path else "test" if "test" in frame_path else "train"
+                depth_root = os.path.join(
+                    "/root/small-data/nerf_synthetic_dngaussian",
+                    scene_name,
+                    split,
+                    "depth_maps",
+                )
+                depth_candidates = [
+                    os.path.join(depth_root, f"depth_{image_name}.png"),
+                    os.path.join(depth_root, f"depth_{image_name}.pfm"),
+                    os.path.join(depth_root, f"depth_{image_name}_depth_0000.png"),
+                    os.path.join(depth_root, f"depth_{image_name}_depth_0000.pfm"),
+                ]
+                depth_image = None
+                for depth_path in depth_candidates:
+                    if os.path.exists(depth_path):
+                        try:
+                            depth_image = imageio.imread(depth_path).astype(np.float32)
+                        except Exception:
+                            depth_image = None
+                        break
             else:
                 depth_image = None
 
@@ -395,21 +436,22 @@ def readNerfSyntheticInfo(path, white_background, eval, n_views=0, extension=".p
 
     ply_path = os.path.join(path, str(n_views) + "_views/dense/fused.ply")
 
-    # if not os.path.exists(ply_path):
-    #     # Since this data set has no colmap data, we start with random points
-    #     num_pts = 30000
-    #     print(f"Generating random point cloud ({num_pts})...")
-    #
-    #     # We create random points inside the bounds of the synthetic Blender scenes
-    #     xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
-    #     shs = np.random.random((num_pts, 3)) / 255.0
-    #     pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
-    #
-    #     storePly(ply_path, xyz, SH2RGB(shs) * 255)
     try:
-        pcd = fetchPly(ply_path)
+        pcd = fetchPly(ply_path) if ply_path else None
     except:
         pcd = None
+    if pcd is None:
+        num_pts = 30000
+        print(f"Generating random point cloud ({num_pts})...")
+        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+    if pcd is not None and np.asarray(pcd.points).shape[0] == 0:
+        num_pts = 30000
+        print(f"Empty point cloud detected, generating random points ({num_pts})...")
+        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
 
 
     scene_info = SceneInfo(point_cloud=pcd,

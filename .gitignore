@@ -121,3 +121,12 @@ output-4/fern/train/ours_3000/gt/IMG_4045.png
 output-4/fern/train/ours_3000/renders/IMG_4027.png
 output-4/fern/train/ours_3000/renders/IMG_4036.png
 output-4/fern/train/ours_3000/renders/IMG_4045.png
+output-4/blender/lego_8views/cameras.json
+output-4/blender/lego_8views/cfg_args
+output-4/blender/lego_8views/chkpnt3000.pth
+output-4/blender/lego_8views/chkpnt5000.pth
+output-4/blender/lego_8views/chkpnt10000.pth
+output-4/blender/lego_8views/input.ply
+output-4/blender/lego_8views/point_cloud/iteration_10000/point_cloud.ply
+output-4/blender/lego_8views/point_cloud/iteration_3000/point_cloud.ply
+output-4/blender/lego_8views/point_cloud/iteration_5000/point_cloud.ply

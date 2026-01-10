@@ -53,8 +53,8 @@ class Scene:
             assert False, "Could not recognize scene type!"
 
 
-        if not self.loaded_iter:
-            with open(scene_info.ply_path, 'rb') as src_file, open(os.path.join(self.model_path, "input.ply") , 'wb') as dest_file:
+        if not self.loaded_iter and scene_info.ply_path and os.path.exists(scene_info.ply_path):
+            with open(scene_info.ply_path, 'rb') as src_file, open(os.path.join(self.model_path, "input.ply"), 'wb') as dest_file:
                 dest_file.write(src_file.read())
             json_cams = []
             camlist = []
@@ -81,10 +81,12 @@ class Scene:
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
 
             pseudo_cams = []
-            if args.source_path.find('llff'):
+            if args.source_path.find('llff') != -1:
                 pseudo_poses = generate_random_poses_llff(self.train_cameras[resolution_scale])
-            elif args.source_path.find('360'):
+            elif args.source_path.find('360') != -1:
                 pseudo_poses = generate_random_poses_360(self.train_cameras[resolution_scale])
+            else:
+                pseudo_poses = []
             view = self.train_cameras[resolution_scale][0]
             for pose in pseudo_poses:
                 pseudo_cams.append(PseudoCamera(

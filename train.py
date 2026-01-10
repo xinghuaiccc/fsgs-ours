@@ -30,6 +30,7 @@ from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
+from utils.graphics_utils import BasicPointCloud
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from lpipsPyTorch import lpips
@@ -43,6 +44,52 @@ def get_gradient(image):
     return dx, dy
 
 
+def make_point_cloud_from_masks(views, N=100_000):
+    # 创新点：利用 Mask 生成 Visual Hull 点云，替代失败的 COLMAP
+    # 仅当 COLMAP 初始化失败时调用
+    print("Generating point cloud from masks (Visual Hull)...")
+
+    min_bound = torch.tensor([-1.5, -1.5, -1.5], device="cuda")
+    max_bound = torch.tensor([1.5, 1.5, 1.5], device="cuda")
+    xyz = (max_bound - min_bound) * torch.rand((N, 3), device="cuda") + min_bound
+
+    valid_mask = torch.ones(N, dtype=torch.bool, device="cuda")
+
+    for cam in views:
+        full_proj_transform = cam.full_proj_transform.to(xyz.device)
+        ones = torch.ones((N, 1), device="cuda")
+        points_hom = torch.cat([xyz, ones], dim=1)
+        p_hom = (full_proj_transform @ points_hom.T).T
+        p_w = 1.0 / (p_hom[:, 3] + 1e-7)
+
+        x = p_hom[:, 0] * p_w
+        y = p_hom[:, 1] * p_w
+        z = p_hom[:, 2]
+        in_view = (x > -1) & (x < 1) & (y > -1) & (y < 1) & (z > 0.2)
+
+        gt_image = cam.original_image.to(xyz.device)
+        H, W = gt_image.shape[1], gt_image.shape[2]
+        u = ((x + 1) * W - 1) * 0.5
+        v = ((y + 1) * H - 1) * 0.5
+        u = u.long().clamp(0, W - 1)
+        v = v.long().clamp(0, H - 1)
+
+        pixel_vals = gt_image[:, v, u]
+        is_foreground = pixel_vals.sum(dim=0) > 0.1
+
+        valid_mask = valid_mask & in_view & is_foreground
+
+    final_xyz = xyz[valid_mask]
+    if final_xyz.shape[0] < 100:
+        print("Warning: Visual Hull produced too few points. Fallback to random cube.")
+        final_xyz = (max_bound - min_bound) * torch.rand((2000, 3), device="cuda") + min_bound
+
+    print(f"Generated {final_xyz.shape[0]} points from Visual Hull.")
+    final_xyz_np = final_xyz.cpu().numpy()
+    final_rgb_np = np.random.random_sample((final_xyz_np.shape[0], 3))
+    return BasicPointCloud(points=final_xyz_np, colors=final_rgb_np, normals=np.zeros_like(final_xyz_np))
+
+
 def training(dataset, opt, pipe, args):
     testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from = args.test_iterations, \
             args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from
@@ -50,6 +97,13 @@ def training(dataset, opt, pipe, args):
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(args)
     scene = Scene(args, gaussians, shuffle=False)
+    # --- Innovation: Blender Sparse Fix ---
+    if dataset.white_background and gaussians.get_xyz.shape[0] < 500:
+        print("Detected Blender Sparse Scene with failed COLMAP. Switching to Mask-Guided Init.")
+        train_cams = scene.getTrainCameras()
+        pcd = make_point_cloud_from_masks(train_cams, N=200_000)
+        gaussians.create_from_pcd(pcd, scene.cameras_extent)
+    # --------------------------------------
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -105,19 +159,21 @@ def training(dataset, opt, pipe, args):
         loss = ((1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)))
 
 
-        rendered_depth = render_pkg["depth"][0]
-        midas_depth = torch.tensor(viewpoint_cam.depth_image).cuda()
-        rendered_depth = rendered_depth.reshape(-1, 1)
-        midas_depth = midas_depth.reshape(-1, 1)
+        if viewpoint_cam.depth_image is not None:
+            rendered_depth = render_pkg["depth"][0]
+            midas_depth = torch.tensor(viewpoint_cam.depth_image).cuda()
+            rendered_depth = rendered_depth.reshape(-1, 1)
+            midas_depth = midas_depth.reshape(-1, 1)
 
-        depth_loss = min(
-                        (1 - pearson_corrcoef( - midas_depth, rendered_depth)),
-                        (1 - pearson_corrcoef(1 / (midas_depth + 200.), rendered_depth))
-        )
-        loss += args.depth_weight * depth_loss
+            depth_loss = min(
+                            (1 - pearson_corrcoef( - midas_depth, rendered_depth)),
+                            (1 - pearson_corrcoef(1 / (midas_depth + 200.), rendered_depth))
+            )
+            loss += args.depth_weight * depth_loss
 
-        if iteration > args.end_sample_pseudo:
-            args.depth_weight = 0.001
+            if iteration > args.end_sample_pseudo:
+                args.depth_weight = 0.001
+
 
 
         # if iteration % args.sample_pseudo_interval == 0 and iteration > args.start_sample_pseudo and iteration < args.end_sample_pseudo:

@@ -14,6 +14,7 @@ def parse_args():
     )
     parser.add_argument("--n_views", type=int, default=3)
     parser.add_argument("--sample_pseudo_interval", type=int, default=1)
+    parser.add_argument("--iterations", type=int, default=3000)
     parser.add_argument("--train_script", default="train.py")
     parser.add_argument(
         "--scenes",
@@ -31,7 +32,7 @@ def main():
         return 1
 
     default_scenes = [
-        # "fern",
+        "fern",
         "flower",
         "fortress",
         "horns",
@@ -69,6 +70,8 @@ def main():
             str(args.n_views),
             "--sample_pseudo_interval",
             str(args.sample_pseudo_interval),
+            "--iterations",
+            str(args.iterations),
         ]
         subprocess.run(cmd, check=True)
     return 0
