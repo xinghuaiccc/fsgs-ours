@@ -334,7 +334,8 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         contents = json.load(json_file)
         fovx = contents["camera_angle_x"]
 
-        skip = 8 if transformsfile == 'transforms_test.json' else 1
+        # Use full test split; transforms_test.json is already pre-split.
+        skip = 1
         frames = contents["frames"][::skip]
         for idx, frame in tqdm(enumerate(frames)):
             frame_path = frame["file_path"]

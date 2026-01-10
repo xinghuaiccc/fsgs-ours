@@ -344,6 +344,11 @@ if __name__ == "__main__":
 
     print("Optimizing " + args.model_path)
 
+    if os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
+        raise SystemExit(
+            "Blender dataset detected. Use `python train_blender_dngs.py` for Blender training."
+        )
+
     # Initialize system state (RNG)
     safe_state(args.quiet)
 

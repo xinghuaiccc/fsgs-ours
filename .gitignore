@@ -130,3 +130,16 @@ output-4/blender/lego_8views/input.ply
 output-4/blender/lego_8views/point_cloud/iteration_10000/point_cloud.ply
 output-4/blender/lego_8views/point_cloud/iteration_3000/point_cloud.ply
 output-4/blender/lego_8views/point_cloud/iteration_5000/point_cloud.ply
+output-4/
+output-4/fern/chkpnt6000.pth
+output-4/fern/chkpnt7000.pth
+output-4/fern/chkpnt8000.pth
+output-4/orchids/cameras.json
+output-4/orchids/cfg_args
+output-4/orchids/chkpnt3000.pth
+output-4/orchids/chkpnt5000.pth
+output-4/orchids/chkpnt10000.pth
+output-4/orchids/input.ply
+output-4/orchids/point_cloud/iteration_10000/point_cloud.ply
+output-4/orchids/point_cloud/iteration_3000/point_cloud.ply
+output-4/orchids/point_cloud/iteration_5000/point_cloud.ply
