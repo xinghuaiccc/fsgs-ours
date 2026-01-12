@@ -129,4 +129,5 @@ def render(viewpoint_camera, pc, pipe, bg_color : torch.Tensor, scaling_modifier
             "viewspace_points": screenspace_points,
             "visibility_filter" : radii > 0,
             "radii": radii,
-            "depth": depth}
+            "depth": depth,
+            "alpha": alpha}

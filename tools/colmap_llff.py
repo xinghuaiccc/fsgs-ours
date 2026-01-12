@@ -173,7 +173,7 @@ def pipeline(scene, base_path, n_views):
         pass
 
     res = os.popen( 'colmap feature_extractor --database_path database.db --image_path images  --SiftExtraction.max_image_size 4032 --SiftExtraction.max_num_features 32768 --SiftExtraction.estimate_affine_shape 1 --SiftExtraction.domain_size_pooling 1').read()
-    os.system( 'colmap exhaustive_matcher --database_path database.db --SiftMatching.guided_matching 1 --SiftMatching.max_num_matches 32768')
+    os.system('colmap exhaustive_matcher --database_path database.db')
     db = COLMAPDatabase.connect('database.db')
     db_images = db.execute("SELECT * FROM images")
     img_rank = [db_image[1] for db_image in db_images]
@@ -192,5 +192,4 @@ def pipeline(scene, base_path, n_views):
 
 
 for scene in ['fern', 'flower', 'fortress',  'horns',  'leaves',  'orchids',  'room',  'trex']:# ['bonsai', 'counter', 'garden', 'kitchen', 'room', 'stump']:
-    pipeline(scene, base_path = '/ssd1/zehao/FSGS/dataset/nerf_llff_data/', n_views = 3)  # please use absolute path!
-
+    pipeline(scene, base_path = '/root/all-data/nerf_llff_data/', n_views = 3)  # please use absolute path!

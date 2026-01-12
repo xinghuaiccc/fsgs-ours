@@ -60,6 +60,7 @@ class GaussianModel:
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
+        self.xyz_lr_scale = 1.0
         self.unpooling_grad_threshold = args.unpooling_grad_threshold
         self.setup_functions()
         self.bg_color = torch.empty(0)
@@ -79,25 +80,63 @@ class GaussianModel:
             self.denom,
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
+            self.xyz_lr_scale,
+            self.confidence,
         )
 
     def restore(self, model_args, training_args):
-        (self.active_sh_degree,
-         self._xyz,
-         self._features_dc,
-         self._features_rest,
-         self._scaling,
-         self._rotation,
-         self._opacity,
-         self.max_radii2D,
-         xyz_gradient_accum,
-         denom,
-         opt_dict,
-         self.spatial_lr_scale) = model_args
+        confidence = None
+        if len(model_args) == 12:
+            (self.active_sh_degree,
+             self._xyz,
+             self._features_dc,
+             self._features_rest,
+             self._scaling,
+             self._rotation,
+             self._opacity,
+             self.max_radii2D,
+             xyz_gradient_accum,
+             denom,
+             opt_dict,
+             self.spatial_lr_scale) = model_args
+            self.xyz_lr_scale = 1.0
+        elif len(model_args) == 13:
+            (self.active_sh_degree,
+             self._xyz,
+             self._features_dc,
+             self._features_rest,
+             self._scaling,
+             self._rotation,
+             self._opacity,
+             self.max_radii2D,
+             xyz_gradient_accum,
+             denom,
+             opt_dict,
+             self.spatial_lr_scale,
+             self.xyz_lr_scale) = model_args
+        else:
+            (self.active_sh_degree,
+             self._xyz,
+             self._features_dc,
+             self._features_rest,
+             self._scaling,
+             self._rotation,
+             self._opacity,
+             self.max_radii2D,
+             xyz_gradient_accum,
+             denom,
+             opt_dict,
+             self.spatial_lr_scale,
+             self.xyz_lr_scale,
+             confidence) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
         # self.optimizer.load_state_dict(opt_dict)
+        if confidence is None or confidence.shape[0] != self._opacity.shape[0]:
+            self.confidence = torch.ones_like(self._opacity, device=self._opacity.device)
+        else:
+            self.confidence = confidence
 
     @property
     def get_scaling(self):
@@ -188,7 +227,7 @@ class GaussianModel:
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''
-        xyz_lr = self.xyz_scheduler_args(iteration)
+        xyz_lr = self.xyz_scheduler_args(iteration) * self.xyz_lr_scale
         for param_group in self.optimizer.param_groups:
             if param_group["name"] == "xyz":
                 param_group['lr'] = xyz_lr

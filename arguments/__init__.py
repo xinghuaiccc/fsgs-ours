@@ -98,6 +98,36 @@ class OptimizationParams(ParamGroup):
         self.dist_thres = 10.
         self.depth_weight = 0.05
         self.depth_pseudo_weight = 0.5
+        self.grad_loss_weight = 0.1
+        self.sh_sparsity_weight = 0.2
+        self.depth_shape_weight = 0.1
+        self.loss_print_interval = 0
+        self.monotonic_psnr = False
+        self.monotonic_start_iter = 1000
+        self.monotonic_psnr_tolerance = 0.0
+        self.monotonic_lr_decay = 0.5
+        self.monotonic_reg_growth = 1.2
+        self.monotonic_freeze_densify = True
+        self.monotonic_freeze_sh = True
+        self.monotonic_restore_best = True
+        self.monotonic_retest = False
+        self.capacity_stage1_end = 1000
+        self.capacity_stage2_end = 3000
+        self.capacity_freeze_sh_stage1 = True
+        self.capacity_freeze_densify_stage1 = True
+        self.rpc_weight = 0.02
+        self.rpc_interval = 50
+        self.rpc_sample_size = 4096
+        self.sh_angular_weight = 0.0
+        self.dino_weight = 0.0
+        self.dino_interval = 50
+        self.dino_resize = 224
+        self.dino_model = "dinov2_vits14"
+        self.gfc_enable = False
+        self.gfc_stage1_end = 3000
+        self.gfc_feature_lr_scale_stage1 = 0.0
+        self.gfc_depth_weight = 0.05
+        self.gfc_freeze_sh = True
         super().__init__(parser, "Optimization Parameters")
 
 
