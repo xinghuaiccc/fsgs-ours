@@ -97,6 +97,8 @@ class OptimizationParams(ParamGroup):
         self.dist_thres = 10.
         self.depth_weight = 0.05
         self.depth_pseudo_weight = 0.5
+        self.mvs_cycle_weight = 0.0
+        self.mvs_occ_epsilon = 0.05
         super().__init__(parser, "Optimization Parameters")
 
 

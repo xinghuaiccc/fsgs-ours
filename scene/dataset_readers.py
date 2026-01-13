@@ -293,17 +293,18 @@ def readColmapSceneInfo(path, images, eval, n_views=0, llffhold=8):
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     if eval:
-        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
-        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+        if n_views > 0:
+            idx_sub = np.linspace(0, len(cam_infos) - 1, n_views)
+            idx_sub = [round(i) for i in idx_sub]
+            train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx in idx_sub]
+            test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx not in idx_sub]
+            assert len(train_cam_infos) == n_views
+        else:
+            train_cam_infos = cam_infos
+            test_cam_infos = []
     else:
         train_cam_infos = cam_infos
         test_cam_infos = []
-
-    if n_views > 0:
-        idx_sub = np.linspace(0, len(train_cam_infos)-1, n_views)
-        idx_sub = [round(i) for i in idx_sub]
-        train_cam_infos = [c for idx, c in enumerate(train_cam_infos) if idx in idx_sub]
-        assert len(train_cam_infos) == n_views
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
     scene_info = SceneInfo(point_cloud=pcd,
