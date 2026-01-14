@@ -19,6 +19,7 @@ import os
 import math
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
 from torchmetrics import PearsonCorrCoef
 from torchmetrics.functional.regression import pearson_corrcoef
 from random import randint
@@ -27,6 +28,7 @@ from utils.depth_utils import estimate_depth
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
+from utils.graphics_utils import fov2focal
 from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
@@ -303,6 +305,7 @@ def training(dataset, opt, pipe, args):
 
     viewpoint_stack, pseudo_stack = None, None
     ema_loss_for_log = 0.0
+    meshgrid_cache = {}
     best_test_psnr = -1.0
     best_state = None
     best_iter = -1
@@ -317,6 +320,51 @@ def training(dataset, opt, pipe, args):
         if dino_model is None:
             opt.dino_weight = 0.0
     first_iter += 1
+
+    def get_meshgrid(h, w, device):
+        key = (h, w, device)
+        if key not in meshgrid_cache:
+            xs = torch.arange(w, device=device).view(1, 1, 1, w).expand(1, 1, h, w)
+            ys = torch.arange(h, device=device).view(1, 1, h, 1).expand(1, 1, h, w)
+            meshgrid_cache[key] = (xs, ys)
+        return meshgrid_cache[key]
+
+    def mvs_cycle_loss(image_src, depth_src_map, cam_src, cam_tgt, gt_tgt, depth_tgt):
+        h, w = depth_tgt.shape
+        device = depth_tgt.device
+        xs, ys = get_meshgrid(h, w, device)
+
+        fx = torch.tensor(fov2focal(cam_tgt.FoVx, w), device=device, dtype=depth_tgt.dtype)
+        fy = torch.tensor(fov2focal(cam_tgt.FoVy, h), device=device, dtype=depth_tgt.dtype)
+        cx = w * 0.5
+        cy = h * 0.5
+
+        z = depth_tgt.unsqueeze(0).unsqueeze(0).clamp(min=1e-3)
+        x = (xs - cx) / fx * z
+        y = (ys - cy) / fy * z
+
+        pts_cam = torch.cat([x, y, z, torch.ones_like(z)], dim=1)  # [1,4,h,w]
+        pts_cam = pts_cam.permute(0, 2, 3, 1).reshape(-1, 4)
+
+        c2w_tgt = torch.inverse(cam_tgt.world_view_transform)
+        pts_world = pts_cam @ c2w_tgt.T
+        pts_view_src = pts_world @ cam_src.world_view_transform.T
+        pts_clip_src = pts_view_src @ cam_src.projection_matrix.T
+
+        w_clip = pts_clip_src[:, 3:4].clamp(min=1e-6)
+        grid_src = (pts_clip_src[:, :2] / w_clip).view(1, h, w, 2)
+        depth_proj = pts_view_src[:, 2].view(1, 1, h, w)
+
+        warped = F.grid_sample(image_src.unsqueeze(0), grid_src, align_corners=False, padding_mode="zeros")
+        valid = (grid_src.abs() <= 1).all(dim=-1, keepdim=True).permute(0, 3, 1, 2)
+
+        depth_src_sampled = F.grid_sample(depth_src_map.unsqueeze(0).unsqueeze(0), grid_src, align_corners=False, padding_mode="zeros")
+        occ_mask = (torch.abs(depth_proj - depth_src_sampled) <= args.mvs_occ_epsilon * torch.abs(depth_proj)).float()
+        mask = valid.float() * occ_mask
+
+        photometric = torch.abs(warped - gt_tgt.unsqueeze(0)) * mask
+        return photometric.sum() / (mask.sum() + 1e-6)
+
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -376,6 +424,21 @@ def training(dataset, opt, pipe, args):
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = ((1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)))
+
+        if args.mvs_cycle_weight > 0 and len(scene.getTrainCameras()) > 1:
+            # pick a different training view for cross-view cycle
+            other_cam = viewpoint_cam
+            while other_cam.uid == viewpoint_cam.uid:
+                other_cam = scene.getTrainCameras()[randint(0, len(scene.getTrainCameras()) - 1)]
+
+            render_pkg_other = render(other_cam, gaussians, pipe, background)
+            image_other = render_pkg_other["render"]
+            depth_other = render_pkg_other["depth"][0]
+            gt_other = other_cam.original_image.cuda()
+
+            cycle_ab = mvs_cycle_loss(image, render_pkg["depth"][0], viewpoint_cam, other_cam, gt_other, depth_other)
+            cycle_ba = mvs_cycle_loss(image_other, depth_other, other_cam, viewpoint_cam, gt_image, render_pkg["depth"][0])
+            loss += args.mvs_cycle_weight * 0.5 * (cycle_ab + cycle_ba)
 
         dino_loss = None
         if opt.dino_weight > 0.0 and dino_model is not None:
