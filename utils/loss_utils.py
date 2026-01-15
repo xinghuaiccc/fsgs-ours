@@ -73,6 +73,32 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
     else:
         return ssim_map.mean(1).mean(1).mean(1)
 
+def depth_smoothness_loss(depth, img):
+    """
+    Computes image-aware depth smoothness loss.
+    depth: (1, H, W)
+    img: (3, H, W)
+    """
+    # Use disparity (inverse depth) for better smoothness properties
+    # Add a small epsilon to avoid division by zero
+    disp = 1.0 / (depth + 1e-5)
+    
+    # Normalize disparity to [0, 1] for stable gradients
+    disp_max = disp.max()
+    disp_min = disp.min()
+    if disp_max - disp_min > 1e-5:
+        disp = (disp - disp_min) / (disp_max - disp_min)
+    
+    depth_dy = torch.abs(disp[:, 1:, :] - disp[:, :-1, :])
+    depth_dx = torch.abs(disp[:, :, 1:] - disp[:, :, :-1])
 
+    img_dy = torch.mean(torch.abs(img[:, 1:, :] - img[:, :-1, :]), 0, keepdim=True)
+    img_dx = torch.mean(torch.abs(img[:, :, 1:] - img[:, :, :-1]), 0, keepdim=True)
 
+    weights_y = torch.exp(-img_dy)
+    weights_x = torch.exp(-img_dx)
 
+    loss_y = depth_dy * weights_y
+    loss_x = depth_dx * weights_x
+
+    return loss_x.mean() + loss_y.mean()

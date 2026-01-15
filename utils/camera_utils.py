@@ -15,7 +15,7 @@ import cv2
 from tqdm import tqdm
 from utils.general_utils import PILtoTorch
 from utils.graphics_utils import fov2focal
-from utils.depth_utils import estimate_depth
+# from utils.depth_utils import estimate_depth
 
 WARNED = False
 
@@ -46,7 +46,8 @@ def loadCam(args, id, cam_info, resolution_scale):
     gt_image = resized_image_rgb[:3, ...]
     loaded_mask = None
 
-    depth = estimate_depth(gt_image.cuda()).cpu().numpy()
+    # depth = estimate_depth(gt_image.cuda()).cpu().numpy()
+    depth = getattr(cam_info, 'depth_image', None)
 
     if resized_image_rgb.shape[1] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]

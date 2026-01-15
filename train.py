@@ -21,8 +21,8 @@ import torch
 from torchmetrics import PearsonCorrCoef
 from torchmetrics.functional.regression import pearson_corrcoef
 from random import randint
-from utils.loss_utils import l1_loss, l1_loss_mask, l2_loss, ssim
-from utils.depth_utils import estimate_depth
+from utils.loss_utils import l1_loss, l1_loss_mask, l2_loss, ssim, depth_smoothness_loss
+# from utils.depth_utils import estimate_depth
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -54,6 +54,11 @@ def training(dataset, opt, pipe, args):
     iter_start = torch.cuda.Event(enable_timing=True)
     iter_end = torch.cuda.Event(enable_timing=True)
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
+
+    # Use lambda_depth if provided (for backward compatibility or user preference)
+    if hasattr(args, 'lambda_depth') and args.lambda_depth > 0:
+        args.depth_weight = args.lambda_depth
+    print(f"Using depth weight: {args.depth_weight}")
 
     viewpoint_stack, pseudo_stack = None, None
     ema_loss_for_log = 0.0
@@ -87,7 +92,36 @@ def training(dataset, opt, pipe, args):
             viewpoint_stack = scene.getTrainCameras().copy()
 
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+
+        # [Innovation] View-Jittering: Small perturbation to camera pose to improve generalization
+        if iteration > 1000 and iteration % 2 == 0:
+            # Create a jittered copy of the camera
+            jitter_scale = 0.005 # ~0.3 degrees
+            R_jitter = torch.eye(3, device="cuda") + torch.randn((3, 3), device="cuda") * jitter_scale
+            U, S, V = torch.svd(R_jitter)
+            R_jitter = U @ V.t() # Ensure it's a valid rotation matrix
+            
+            # Update world_view_transform
+            original_w2c = viewpoint_cam.world_view_transform.clone().transpose(0, 1)
+            original_R = original_w2c[:3, :3]
+            original_T = original_w2c[:3, 3]
+            
+            new_R = R_jitter @ original_R
+            new_w2c = torch.eye(4, device="cuda")
+            new_w2c[:3, :3] = new_R
+            new_w2c[:3, 3] = original_T
+            
+            # Temporary "JitterCam" object to pass to render
+            from scene.cameras import MiniCam
+            jitter_w2c = new_w2c.transpose(0, 1)
+            jitter_full_proj = (jitter_w2c.unsqueeze(0).bmm(viewpoint_cam.projection_matrix.unsqueeze(0))).squeeze(0)
+            render_cam = MiniCam(viewpoint_cam.image_width, viewpoint_cam.image_height, 
+                                 viewpoint_cam.FoVy, viewpoint_cam.FoVx, viewpoint_cam.znear, viewpoint_cam.zfar,
+                                 jitter_w2c, jitter_full_proj)
+        else:
+            render_cam = viewpoint_cam
+
+        render_pkg = render(render_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
 
@@ -96,20 +130,34 @@ def training(dataset, opt, pipe, args):
         Ll1 =  l1_loss_mask(image, gt_image)
         loss = ((1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)))
 
+        # [Innovation] Opacity Sparsity Regularization to reduce floaters in few-shot scenarios
+        loss += 0.01 * torch.mean(gaussians.get_opacity)
+
+        # [Innovation] SH Regularization: Prevent high-frequency appearance overfitting
+        loss += 0.0001 * torch.mean(gaussians.get_features[:, 1:]**2)
+
+        # [Innovation] Anisotropy Regularization: Discourage extremely flat Gaussians
+        scaling = gaussians.get_scaling
+        anisotropy = torch.max(scaling, dim=1).values / (torch.min(scaling, dim=1).values + 1e-5)
+        loss += 0.001 * torch.mean(anisotropy)
 
         rendered_depth = render_pkg["depth"][0]
-        midas_depth = torch.tensor(viewpoint_cam.depth_image).cuda()
-        rendered_depth = rendered_depth.reshape(-1, 1)
-        midas_depth = midas_depth.reshape(-1, 1)
+        if viewpoint_cam.depth_image is not None:
+            midas_depth = torch.tensor(viewpoint_cam.depth_image).cuda()
+            rendered_depth = rendered_depth.reshape(-1, 1)
+            midas_depth = midas_depth.reshape(-1, 1)
 
-        depth_loss = min(
-                        (1 - pearson_corrcoef( - midas_depth, rendered_depth)),
-                        (1 - pearson_corrcoef(1 / (midas_depth + 200.), rendered_depth))
-        )
-        loss += args.depth_weight * depth_loss
+            depth_loss = min(
+                            (1 - pearson_corrcoef( - midas_depth, rendered_depth)),
+                            (1 - pearson_corrcoef(1 / (midas_depth + 200.), rendered_depth))
+            )
+            loss += args.depth_weight * depth_loss
+        else:
+            # [Innovation] Use Edge-aware Depth Smoothness Loss if no precomputed depth is available
+            loss += args.depth_weight * depth_smoothness_loss(render_pkg["depth"], image)
 
         if iteration > args.end_sample_pseudo:
-            args.depth_weight = 0.001
+            args.depth_weight = 0.01
 
 
 
@@ -119,16 +167,14 @@ def training(dataset, opt, pipe, args):
             pseudo_cam = pseudo_stack.pop(randint(0, len(pseudo_stack) - 1))
 
             render_pkg_pseudo = render(pseudo_cam, gaussians, pipe, background)
-            rendered_depth_pseudo = render_pkg_pseudo["depth"][0]
-            midas_depth_pseudo = estimate_depth(render_pkg_pseudo["render"], mode='train')
 
-            rendered_depth_pseudo = rendered_depth_pseudo.reshape(-1, 1)
-            midas_depth_pseudo = midas_depth_pseudo.reshape(-1, 1)
-            depth_loss_pseudo = (1 - pearson_corrcoef(rendered_depth_pseudo, -midas_depth_pseudo)).mean()
+            # [Innovation] Use Edge-aware Depth & Opacity Smoothness Loss
+            # This provides stronger geometric regularization on unseen views without needing external models
+            loss_smooth = depth_smoothness_loss(render_pkg_pseudo["depth"], render_pkg_pseudo["render"])
+            loss_alpha_smooth = depth_smoothness_loss(render_pkg_pseudo["alpha"], render_pkg_pseudo["render"])
 
-            if torch.isnan(depth_loss_pseudo).sum() == 0:
-                loss_scale = min((iteration - args.start_sample_pseudo) / 500., 1)
-                loss += loss_scale * args.depth_pseudo_weight * depth_loss_pseudo
+            loss_scale = min((iteration - args.start_sample_pseudo) / 500., 1)
+            loss += loss_scale * args.depth_pseudo_weight * (loss_smooth + 0.1 * loss_alpha_smooth)
 
 
         loss.backward()

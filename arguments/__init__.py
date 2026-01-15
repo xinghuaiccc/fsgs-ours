@@ -88,7 +88,7 @@ class OptimizationParams(ParamGroup):
         self.opacity_reset_interval = 3000
         self.densify_from_iter = 500
         self.prune_from_iter = 500
-        self.densify_until_iter = 10_000
+        self.densify_until_iter = 3_000
         self.densify_grad_threshold = 0.0005
         self.unpooling_grad_threshold = 0.0002
         self.prune_threshold = 0.005
@@ -96,8 +96,10 @@ class OptimizationParams(ParamGroup):
         self.end_sample_pseudo = 9500
         self.sample_pseudo_interval = 100
         self.dist_thres = 10.
-        self.depth_weight = 0.05
-        self.depth_pseudo_weight = 0.5
+        self.depth_weight = 0.5
+        self.depth_pseudo_weight = 1.0
+        # [新增] 深度损失权重，建议初始值设为 0.1 或 0.05 试一下
+        self.lambda_depth = 0.5
         super().__init__(parser, "Optimization Parameters")
 
 

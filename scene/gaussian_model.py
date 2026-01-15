@@ -194,6 +194,11 @@ class GaussianModel:
                 param_group['lr'] = xyz_lr
                 return xyz_lr
 
+    def update_learning_rate_manual(self, scale):
+        ''' Manually scale the learning rate of all parameter groups '''
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] *= scale
+
 
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']

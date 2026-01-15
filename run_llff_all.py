@@ -31,7 +31,7 @@ def main():
         return 1
 
     default_scenes = [
-        # "fern",
+        "fern",
         "flower",
         "fortress",
         "horns",
